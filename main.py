@@ -192,7 +192,7 @@ def main():
     # Pytorch has default MNIST dataloader which loads data at each iteration
     train_dataset = datasets.MNIST('../data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
-                    transforms.RandomApply([transforms.RandomResizedCrop(28)]),
+                    transforms.RandomApply([transforms.RandomResizedCrop(28,(0.8,1.))]),
                     transforms.RandomAffine(degrees=(-3,3),translate=(0.05,0.05)),
                     transforms.ToTensor(),           # Add data augmentation here
                     transforms.Normalize((0.1307,), (0.3081,))
@@ -200,7 +200,7 @@ def main():
 
     valid_dataset = datasets.MNIST('../data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
-                    transforms.ToTensor(),           # Add data augmentation here
+                    transforms.ToTensor(),           
                     transforms.Normalize((0.1307,), (0.3081,))
                 ]))
 

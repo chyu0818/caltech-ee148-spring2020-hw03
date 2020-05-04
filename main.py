@@ -9,6 +9,10 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data.sampler import SubsetRandomSampler
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+from sklearn.manifold import TSNE
+import matplotlib.cm as cm
+import heapq
 
 import os
 
@@ -120,10 +124,10 @@ class Net(nn.Module):
         x = torch.flatten(x, 1)
         x = self.fc1(x)
         x = F.relu(x)
-        x = self.fc2(x)
+        x_emb = self.fc2(x)
 
-        output = F.log_softmax(x, dim=1)
-        return output
+        output = F.log_softmax(x_emb, dim=1)
+        return output, x_emb
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
@@ -137,7 +141,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()               # Clear the gradient
-        output = model(data)                # Make predictions
+        output, emb = model(data)                # Make predictions
         loss = F.nll_loss(output, target)   # Compute loss
         train_loss += F.nll_loss(output, target, reduction='sum').item()
         train_num += len(data)
@@ -151,19 +155,33 @@ def train(args, model, device, train_loader, optimizer, epoch):
     return train_loss
 
 
-def test(model, device, test_loader):
+def test(model, device, test_loader, get_extra=False):
     model.eval()    # Set the model to inference mode
     test_loss = 0
     correct = 0
     test_num = 0
+    target_lst = []
+    pred_lst = []
+    embeddings = []
+    targets = []
+    datas = []
     with torch.no_grad():   # For the inference step, gradient is not computed
-        for data, target in test_loader:
+        for batch_idx, (data, target) in enumerate(test_loader):
             data, target = data.to(device), target.to(device)
-            output = model(data)
+            output, emb = model(data)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
             test_num += len(data)
+            # Make list of predictions and targets for confusion matrix.
+            # Also get embeddings
+            if get_extra:
+                target_lst += target.flatten().tolist()
+                pred_lst += pred.flatten().tolist()
+                for i in range(np.shape(emb)[0]):
+                    embeddings.append(emb[i].tolist())
+                    targets.append(target[i])
+                    datas.append(data[i,0])
 
     test_loss /= test_num
 
@@ -171,7 +189,7 @@ def test(model, device, test_loader):
         test_loss, correct, test_num,
         100. * correct / test_num))
     test_acc = correct / test_num
-    return test_loss, test_acc
+    return test_loss, test_acc, target_lst, pred_lst, np.asarray(embeddings), targets, datas
 
 
 def plot_train_test_loss_epoch(train_loss, test_loss, num_epochs):
@@ -184,6 +202,7 @@ def plot_train_test_loss_epoch(train_loss, test_loss, num_epochs):
     plt.show()
     return
 
+
 def get_acc_loss(sizes, device, train_loader, test_loader):
     train_loss_lst = []
     train_acc_lst = []
@@ -191,15 +210,15 @@ def get_acc_loss(sizes, device, train_loader, test_loader):
     test_acc_lst = []
     for size in sizes:
         model = Net().to(device)
-        print(size)
         model.load_state_dict(torch.load('mnist_model_' + str(size) + '.pt'))
-        train_loss, train_acc = test(model, device, train_loader)
-        test_loss, test_acc = test(model, device, test_loader)
+        train_loss, train_acc, target_lst, pred_lst, emb, targets, datas = test(model, device, train_loader)
+        test_loss, test_acc, target_lst, pred_lst, emb, targets, datas = test(model, device, test_loader)
         train_loss_lst.append(train_loss)
         train_acc_lst.append(train_acc)
         test_loss_lst.append(test_loss)
         test_acc_lst.append(test_acc)
     return train_loss_lst, train_acc_lst, test_loss_lst, test_acc_lst
+
 
 def plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst):
     # Only trained on 0.85 on dataset.
@@ -207,12 +226,117 @@ def plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst):
     fig, ax = plt.subplots()
     ax.plot(sizes_part, train_loss_lst, color='r', marker='.', label='Train')
     ax.plot(sizes_part, test_loss_lst, color='b', marker='.', label='Validation')
-    ax.set(xlabel='Number of Training Samples', ylabel='NLL Loss', xscale='log', yscale='log', title='Loss vs. Number of Training Samples')
+    ax.set(xlabel='Number of Training Examples', ylabel='NLL Loss', title='Loss vs. Number of Training Examples')
+    ax.set(xscale='log', yscale='log')
     ax.set_xticks(sizes_part)
     ax.set_xticklabels(sizes_part)
     ax.legend(title='Type of Loss')
+    plt.savefig('error_vs_num_ex.png')
     plt.show()
     return
+
+
+def plot_mistakes(model, device, test_loader):
+    model.eval()    # Set the model to inference mode
+    lim_mistakes = 9
+    mistakes = []
+    fig, axes = plt.subplots(3, 3)
+    with torch.no_grad():   # For the inference step, gradient is not computed
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output, emb = model(data)
+            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            for i in range(len(pred)):
+                if pred[i,0] != target[i]:
+                    mistakes.append(data[i,0])
+                    ax = axes[(len(mistakes)-1)//3, (len(mistakes)-1)%3]
+                    ax.imshow(data[i,0], cmap='gray')
+                    ax.set_title('Actual: {} Pred: {}'.format(target[i], pred[i,0]))
+                    if len(mistakes) >= lim_mistakes:
+                        plt.tight_layout()
+                        plt.savefig('mistakes.png')
+                        plt.show()
+                        return mistakes
+    return
+
+
+def plot_kernels(kernels):
+    num_rows = 2
+    num_cols = 4
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(1.5*num_cols,2*num_rows))
+    for i in range(len(kernels)):
+        kernel = kernels[i,0]
+        ax = axes[i//num_cols, i%num_cols]
+        # Normalize input
+        ker = (kernel - torch.min(kernel)) / (torch.max(kernel) - torch.min(kernel))
+        im = ax.imshow(ker, cmap='gray')
+    plt.tight_layout()
+    plt.savefig('learned_kernels.png')
+    plt.show()
+    return
+
+
+def plot_confusion_matrix(target_lst, pred_lst):
+    labels = list(range(10))
+    # Calculate confusion matrix.
+    conf_mat = confusion_matrix(target_lst, pred_lst, labels=labels)
+
+    # Plot.
+    fig, axs = plt.subplots(1,1)
+    axs.axis('tight')
+    axs.axis('off')
+    table = axs.table(cellText=conf_mat, rowLabels=labels, colLabels=labels, loc='center')
+    plt.savefig('confusion_mat.png')
+    plt.show()
+    return
+
+
+def plot_embeddings(embeddings, targets):
+    # do again with separate test function
+    # separate by class list and thn
+    colors = cm.rainbow(np.linspace(0, 1, 10))
+    embeddings_2 = TSNE(n_components=2).fit_transform(embeddings)
+    embeddings_2_classes = [[] for i in range(10)]
+    # Sort out classes.
+    for i in range(len(targets)):
+        embeddings_2_classes[targets[i]].append(embeddings_2[i,:])
+    embeddings_2_classes_arr = [np.asarray(class_arr) for class_arr in embeddings_2_classes]
+    for j in range(10):
+        plt.scatter(embeddings_2_classes_arr[j][:,0], embeddings_2_classes_arr[j][:,1], color=colors[j], marker='.', alpha=0.5, label=j)
+    plt.legend()
+    plt.title('Feature Vectors By Class')
+    plt.savefig('tSNE_embedding.png')
+    plt.show()
+    return
+
+
+def find_similar_vectors(embeddings, datas):
+    num_ims = 8
+    fig, axes = plt.subplots(4, 9)
+    for i in range(4):
+        emb = embeddings[(i+1)*1000]
+        embeddings_dist = np.linalg.norm(embeddings - emb, axis=1)
+        closest_emb = heapq.nsmallest(num_ims, embeddings_dist)
+        closest_emb_inds = []
+        for c_emb in closest_emb:
+            closest_emb_inds += list(np.argwhere(embeddings_dist == c_emb).flatten())
+        # If there's more than one vector that has the same distance.
+        # We can cut it off like this because nsmallest returns an ordered list.
+        closest_emb_inds = closest_emb_inds[:num_ims]
+        # Visualize I_0.
+        ax = axes[i, 0]
+        ax.imshow(datas[(i+1)*1000], cmap='gray')
+        ax.set_title('I_0')
+        # Visualize other 8 images with closest feature vectors.
+        for k in range(8):
+            ax = axes[i, k+1]
+            ax.imshow(datas[closest_emb_inds[k]], cmap='gray')
+            ax.set_title('I_{}'.format(k+1))
+    plt.tight_layout()
+    plt.savefig('sim_feature_vecs.png')
+    plt.show()
+    return
+
 
 def main():
     # Training settings
@@ -270,7 +394,8 @@ def main():
         test_loader = torch.utils.data.DataLoader(
             test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
 
-        test(model, device, test_loader)
+        test_loss, test_acc, target_lst, pred_lst, emb, targets, datas = \
+                                test(model, device, test_loader, get_extra=True)
 
         train_dataset = datasets.MNIST('../data', train=True,
                     transform=transforms.Compose([
@@ -282,8 +407,18 @@ def main():
             train_dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
 
         sizes = [3750, 7500, 15000, 30000, 60000]
-        train_loss_lst, train_acc_lst, test_loss_lst, test_acc_lst = get_acc_loss(sizes, device, train_loader, test_loader)
+        train_loss_lst, train_acc_lst, test_loss_lst, test_acc_lst = \
+                        get_acc_loss(sizes, device, train_loader, test_loader)
         plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst)
+
+        plot_mistakes(model, device, test_loader)
+
+        plot_kernels(model.conv1.weight.data)
+
+        plot_confusion_matrix(target_lst, pred_lst)
+
+        plot_embeddings(emb, targets)
+        find_similar_vectors(emb, datas)
         return
 
     # Pytorch has default MNIST dataloader which loads data at each iteration
@@ -308,9 +443,8 @@ def main():
     indices_all = np.asarray(range(len(train_dataset)))
     np.random.shuffle(indices_all)
     # Decide amount of data to train on.
-    data_frac = float(1/16)
+    data_frac = float(1)
     indices_all = indices_all[:int(data_frac * len(indices_all))]
-    print(len(indices_all))
     valid_per_class = np.ones(10) * int(0.15 * len(indices_all) * 0.1)
 
     subset_indices_train = []
@@ -350,7 +484,7 @@ def main():
     # Training loop
     for epoch in range(1, args.epochs + 1):
         train_loss = train(args, model, device, train_loader, optimizer, epoch)
-        val_loss, val_acc = test(model, device, val_loader)
+        val_loss, val_acc, target_lst, pred_lst, emb, targets, datas = test(model, device, val_loader)
         train_loss_all.append(train_loss)
         val_loss_all.append(val_loss)
         scheduler.step()    # learning rate scheduler
@@ -361,8 +495,6 @@ def main():
         torch.save(model.state_dict(), "mnist_model_" + str(len(indices_all)) + ".pt")
 
     # Plot training and val loss as a function of epoch.
-    print('train', train_loss_all)
-    print('val', val_loss_all)
     plot_train_test_loss_epoch(train_loss_all, val_loss_all, args.epochs)
 
 

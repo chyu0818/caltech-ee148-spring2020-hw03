@@ -8,6 +8,7 @@ from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data.sampler import SubsetRandomSampler
 import numpy as np
+import matplotlib.pyplot as plt
 
 import os
 
@@ -84,9 +85,45 @@ class Net(nn.Module):
     '''
     def __init__(self):
         super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=8, kernel_size=(3,3), stride=1)
+        self.conv2 = nn.Conv2d(8, 8, 3, 1)
+        self.conv3 = nn.Conv2d(8, 16, 3, 1)
+        self.conv4 = nn.Conv2d(16, 16, 3, 1)
+        self.dropout1 = nn.Dropout2d(0.5)
+        self.dropout2 = nn.Dropout2d(0.5)
+        self.fc1 = nn.Linear(256, 64)
+        self.fc2 = nn.Linear(64, 10)
+        self.bn1 = nn.BatchNorm2d(8)
+        self.bn2 = nn.BatchNorm2d(8)
+        self.bn3 = nn.BatchNorm2d(16)
+        self.bn4 = nn.BatchNorm2d(16)
 
     def forward(self, x):
-        return x
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = F.avg_pool2d(x, 2)
+        x = self.dropout1(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        x = self.conv4(x)
+        x = self.bn4(x)
+        x = F.relu(x)
+        x = F.avg_pool2d(x, 2)
+        x = self.dropout2(x)
+
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+
+        output = F.log_softmax(x, dim=1)
+        return output
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
@@ -94,18 +131,24 @@ def train(args, model, device, train_loader, optimizer, epoch):
     This is your training function. When you call this function, the model is
     trained for 1 epoch.
     '''
+    train_loss = 0.
+    train_num = 0.
     model.train()   # Set the model to training mode
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()               # Clear the gradient
         output = model(data)                # Make predictions
         loss = F.nll_loss(output, target)   # Compute loss
+        train_loss += F.nll_loss(output, target, reduction='sum').item()
+        train_num += len(data)
         loss.backward()                     # Gradient computation
         optimizer.step()                    # Perform a single optimization step
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.sampler),
                 100. * batch_idx / len(train_loader), loss.item()))
+    train_loss /= train_num
+    return train_loss
 
 
 def test(model, device, test_loader):
@@ -124,10 +167,52 @@ def test(model, device, test_loader):
 
     test_loss /= test_num
 
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.1f}%)\n'.format(
         test_loss, correct, test_num,
         100. * correct / test_num))
+    test_acc = correct / test_num
+    return test_loss, test_acc
 
+
+def plot_train_test_loss_epoch(train_loss, test_loss, num_epochs):
+    fig, ax = plt.subplots()
+    epochs = list(range(1,num_epochs+1))
+    ax.plot(epochs, train_loss, color='r', marker='.', label='Train')
+    ax.plot(epochs, test_loss, color='b', marker='.', label='Validation')
+    ax.set(xlabel='Epoch', ylabel='NLL Loss', yscale='log', title='Loss By Epoch')
+    ax.legend(title='Type of Loss')
+    plt.show()
+    return
+
+def get_acc_loss(sizes, device, train_loader, test_loader):
+    train_loss_lst = []
+    train_acc_lst = []
+    test_loss_lst = []
+    test_acc_lst = []
+    for size in sizes:
+        model = Net().to(device)
+        print(size)
+        model.load_state_dict(torch.load('mnist_model_' + str(size) + '.pt'))
+        train_loss, train_acc = test(model, device, train_loader)
+        test_loss, test_acc = test(model, device, test_loader)
+        train_loss_lst.append(train_loss)
+        train_acc_lst.append(train_acc)
+        test_loss_lst.append(test_loss)
+        test_acc_lst.append(test_acc)
+    return train_loss_lst, train_acc_lst, test_loss_lst, test_acc_lst
+
+def plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst):
+    # Only trained on 0.85 on dataset.
+    sizes_part = [int(0.85 * size) for size in sizes]
+    fig, ax = plt.subplots()
+    ax.plot(sizes_part, train_loss_lst, color='r', marker='.', label='Train')
+    ax.plot(sizes_part, test_loss_lst, color='b', marker='.', label='Validation')
+    ax.set(xlabel='Number of Training Samples', ylabel='NLL Loss', xscale='log', yscale='log', title='Loss vs. Number of Training Samples')
+    ax.set_xticks(sizes_part)
+    ax.set_xticklabels(sizes_part)
+    ax.legend(title='Type of Loss')
+    plt.show()
+    return
 
 def main():
     # Training settings
@@ -173,7 +258,7 @@ def main():
         assert os.path.exists(args.load_model)
 
         # Set the test model
-        model = fcNet().to(device)
+        model = Net().to(device)
         model.load_state_dict(torch.load(args.load_model))
 
         test_dataset = datasets.MNIST('../data', train=False,
@@ -187,6 +272,18 @@ def main():
 
         test(model, device, test_loader)
 
+        train_dataset = datasets.MNIST('../data', train=True,
+                    transform=transforms.Compose([
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.1307,), (0.3081,))
+                    ]))
+
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
+
+        sizes = [3750, 7500, 15000, 30000, 60000]
+        train_loss_lst, train_acc_lst, test_loss_lst, test_acc_lst = get_acc_loss(sizes, device, train_loader, test_loader)
+        plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst)
         return
 
     # Pytorch has default MNIST dataloader which loads data at each iteration
@@ -200,7 +297,7 @@ def main():
 
     valid_dataset = datasets.MNIST('../data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
-                    transforms.ToTensor(),           
+                    transforms.ToTensor(),
                     transforms.Normalize((0.1307,), (0.3081,))
                 ]))
 
@@ -210,7 +307,11 @@ def main():
     # the training and validation sets are disjoint and have the correct relative sizes.
     indices_all = np.asarray(range(len(train_dataset)))
     np.random.shuffle(indices_all)
-    valid_per_class = np.ones(10) * int(0.15 * len(train_dataset) * 0.1)
+    # Decide amount of data to train on.
+    data_frac = float(1/16)
+    indices_all = indices_all[:int(data_frac * len(indices_all))]
+    print(len(indices_all))
+    valid_per_class = np.ones(10) * int(0.15 * len(indices_all) * 0.1)
 
     subset_indices_train = []
     subset_indices_valid = []
@@ -224,7 +325,7 @@ def main():
             subset_indices_train.append(indices_all[i])
         i += 1
     subset_indices_train = subset_indices_train + list(indices_all[i:])
-    assert(len(subset_indices_train) + len(subset_indices_valid) == len(train_dataset))
+    assert(len(subset_indices_train) + len(subset_indices_valid) == len(indices_all))
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size,
@@ -236,7 +337,7 @@ def main():
     )
 
     # Load your model [fcNet, ConvNet, Net]
-    model = ConvNet().to(device)
+    model = Net().to(device)
 
     # Try different optimzers here [Adam, SGD, RMSprop]
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
@@ -244,16 +345,27 @@ def main():
     # Set your learning rate scheduler
     scheduler = StepLR(optimizer, step_size=args.step, gamma=args.gamma)
 
+    train_loss_all = []
+    val_loss_all = []
     # Training loop
     for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch)
-        test(model, device, val_loader)
+        train_loss = train(args, model, device, train_loader, optimizer, epoch)
+        val_loss, val_acc = test(model, device, val_loader)
+        train_loss_all.append(train_loss)
+        val_loss_all.append(val_loss)
         scheduler.step()    # learning rate scheduler
 
         # You may optionally save your model at each epoch here
 
     if args.save_model:
-        torch.save(model.state_dict(), "mnist_model.pt")
+        torch.save(model.state_dict(), "mnist_model_" + str(len(indices_all)) + ".pt")
+
+    # Plot training and val loss as a function of epoch.
+    print('train', train_loss_all)
+    print('val', val_loss_all)
+    plot_train_test_loss_epoch(train_loss_all, val_loss_all, args.epochs)
+
+
 
 
 if __name__ == '__main__':

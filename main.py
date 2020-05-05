@@ -191,7 +191,7 @@ def test(model, device, test_loader, get_extra=False):
     test_acc = correct / test_num
     return test_loss, test_acc, target_lst, pred_lst, np.asarray(embeddings), targets, datas
 
-
+# Plots training and val loss as a function of the epoch.
 def plot_train_test_loss_epoch(train_loss, test_loss, num_epochs):
     fig, ax = plt.subplots()
     epochs = list(range(1,num_epochs+1))
@@ -203,6 +203,7 @@ def plot_train_test_loss_epoch(train_loss, test_loss, num_epochs):
     return
 
 
+# Get the training and test loss and accuracies.
 def get_acc_loss(sizes, device, train_loader, test_loader):
     train_loss_lst = []
     train_acc_lst = []
@@ -220,12 +221,13 @@ def get_acc_loss(sizes, device, train_loader, test_loader):
     return train_loss_lst, train_acc_lst, test_loss_lst, test_acc_lst
 
 
+# Plot the training and test error as a function of the number of training examples.
 def plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst):
     # Only trained on 0.85 on dataset.
     sizes_part = [int(0.85 * size) for size in sizes]
     fig, ax = plt.subplots()
     ax.plot(sizes_part, train_loss_lst, color='r', marker='.', label='Train')
-    ax.plot(sizes_part, test_loss_lst, color='b', marker='.', label='Validation')
+    ax.plot(sizes_part, test_loss_lst, color='b', marker='.', label='Test')
     ax.set(xlabel='Number of Training Examples', ylabel='NLL Loss', title='Loss vs. Number of Training Examples')
     ax.set(xscale='log', yscale='log')
     ax.set_xticks(sizes_part)
@@ -236,6 +238,7 @@ def plot_train_test_loss_subset(sizes, train_loss_lst, test_loss_lst):
     return
 
 
+# Plots 9 examples from the test set where the classifier made a mistake.
 def plot_mistakes(model, device, test_loader):
     model.eval()    # Set the model to inference mode
     lim_mistakes = 9
@@ -260,6 +263,7 @@ def plot_mistakes(model, device, test_loader):
     return
 
 
+# Viualizes 8 of the learned kernels from the first layer of the network.
 def plot_kernels(kernels):
     num_rows = 2
     num_cols = 4
@@ -270,12 +274,14 @@ def plot_kernels(kernels):
         # Normalize input
         ker = (kernel - torch.min(kernel)) / (torch.max(kernel) - torch.min(kernel))
         im = ax.imshow(ker, cmap='gray')
+    fig.suptitle('First Layer Learned Kernels')
     plt.tight_layout()
     plt.savefig('learned_kernels.png')
     plt.show()
     return
 
 
+# Generates a confusion matrix for the test set.
 def plot_confusion_matrix(target_lst, pred_lst):
     labels = list(range(10))
     # Calculate confusion matrix.
@@ -286,11 +292,13 @@ def plot_confusion_matrix(target_lst, pred_lst):
     axs.axis('tight')
     axs.axis('off')
     table = axs.table(cellText=conf_mat, rowLabels=labels, colLabels=labels, loc='center')
+    plt.suptitle('Confusion Matrix (ground truth vs. predictions)')
     plt.savefig('confusion_mat.png')
     plt.show()
     return
 
 
+# Visualizes the tSNE embedding.
 def plot_embeddings(embeddings, targets):
     # do again with separate test function
     # separate by class list and thn
@@ -302,14 +310,16 @@ def plot_embeddings(embeddings, targets):
         embeddings_2_classes[targets[i]].append(embeddings_2[i,:])
     embeddings_2_classes_arr = [np.asarray(class_arr) for class_arr in embeddings_2_classes]
     for j in range(10):
-        plt.scatter(embeddings_2_classes_arr[j][:,0], embeddings_2_classes_arr[j][:,1], color=colors[j], marker='.', alpha=0.5, label=j)
-    plt.legend()
+        plt.scatter(embeddings_2_classes_arr[j][:,0], embeddings_2_classes_arr[j][:,1],
+                    color=colors[j], marker='.', alpha=0.5, label=j)
+    plt.legend(title='Class')
     plt.title('Feature Vectors By Class')
     plt.savefig('tSNE_embedding.png')
     plt.show()
     return
 
 
+# Finds feature vectors that are close in distance.
 def find_similar_vectors(embeddings, datas):
     num_ims = 8
     fig, axes = plt.subplots(4, 9)
